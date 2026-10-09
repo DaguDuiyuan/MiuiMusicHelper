@@ -1,0 +1,60 @@
+[versions]
+agp = "9.4.0"
+kotlin = "2.4.10"
+coreKtx = "1.19.0"
+lifecycleRuntimeKtx = "2.11.0"
+activityCompose = "1.13.0"
+composeBom = "2026.08.00"
+miuix = "0.9.4-rc01"
+# The self-updater's network stack. OkHttp resolves to its Android variant
+# (okhttp-android -> okhttp.aar) through Gradle module metadata; only "okhttp" is named here.
+# The serialization *library* keeps its own version, but its compiler plugin does not - that one
+# is pinned to `kotlin` above, because a compiler plugin built for a different Kotlin than the
+# one compiling the sources is a hard build failure rather than a warning.
+# The changelog renderer: CommonMark -> HTML, plus the WebView helpers that serve the
+# github-markdown-css sheets out of assets without file:// access.
+commonmark = "0.30.0"
+webkit = "1.17.0"
+okhttp = "5.4.0"
+kotlinxSerialization = "1.11.0"
+# The lock screen lyric view's parser. Apple-syllable TTML, enhanced LRC, Lyricify, NetEase YRC
+# and Kugou KRC all come out of one AutoParser, which is the point: the lyric text we can get is
+# whichever of those a source hands us, not one format we picked.
+# Pure Kotlin/JVM with no Android dependencies, so it is safe to load inside SystemUI, and
+# Apache-2.0, which the AGPL-3.0 this module is under takes in without complaint.
+lyricsCore = "0.4.7"
+lyriconSubscriber = "0.1.70"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+
+miuix-core = { group = "top.yukonga.miuix.kmp", name = "miuix-core-android", version.ref = "miuix" }
+miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui-android", version.ref = "miuix" }
+miuix-shader = { group = "top.yukonga.miuix.kmp", name = "miuix-shader-android", version.ref = "miuix" }
+miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", version.ref = "miuix" }
+miuix-preference = { group = "top.yukonga.miuix.kmp", name = "miuix-preference-android", version.ref = "miuix" }
+miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons-android", version.ref = "miuix" }
+material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+miuix-squircle = { group = "top.yukonga.miuix.kmp", name = "miuix-squircle-android", version.ref = "miuix" }
+
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+lyrics-core = { group = "com.mocharealm.accompanist", name = "lyrics-core", version.ref = "lyricsCore" }
+lyricon-subscriber = { group = "io.github.proify.lyricon", name = "subscriber", version.ref = "lyriconSubscriber" }
+commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
+commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-ext-gfm-strikethrough = { group = "org.commonmark", name = "commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
+commonmark-ext-autolink = { group = "org.commonmark", name = "commonmark-ext-autolink", version.ref = "commonmark" }
+commonmark-ext-task-list-items = { group = "org.commonmark", name = "commonmark-ext-task-list-items", version.ref = "commonmark" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

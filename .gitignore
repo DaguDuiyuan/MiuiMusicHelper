@@ -1,0 +1,19 @@
+# Gradle / Android 构建产物
+.gradle/
+build/
+app/build/
+
+# 本机环境（里面写着各自的 Android SDK 路径，不该跟着仓库走）
+local.properties
+
+# 所有 APK：目标 App 的安装包（apk/ 里那个 166MB 的）、临时留的旧版本副本、
+# 以及构建出来的模块包，都不入库。真要归档某个版本用 git add -f。
+*.apk
+
+# IDE
+.idea/
+*.iml
+*.hprof
+
+# macOS
+.DS_Store

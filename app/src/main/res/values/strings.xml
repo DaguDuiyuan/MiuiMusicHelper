@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">小米音乐去广告</string>
+    <string name="module_description">小米音乐（com.miui.player）小助手：去掉开屏广告（腾讯 AMS/优量汇、运营开屏、MIUI 系统开屏）、去掉播放页压在进度条上的「升级超级会员」文案、去掉戴上耳机后弹出的「臻品音质」弹窗，并把播放页的进入/退出动画放慢成 400ms 的平滑滑动。</string>
+</resources>
