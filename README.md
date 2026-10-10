@@ -1,7 +1,8 @@
 # 小米音乐小助手（MiuiMusicHelper）
 
 小米音乐（`com.miui.player`）的 LSPosed 模块，使用新版 Xposed API（**LSPosed API 102**）。
-无界面，在 LSPosed 里启用并勾上作用域 `com.miui.player` 即全自动生效；
+没有自己的界面：在 LSPosed 里启用并勾上作用域 `com.miui.player` 即全自动生效，默认全开，
+七项功能可在音乐 App 设置里单独关（QQ 音源：「更多」页 →「小米音乐小助手」，独立页里带重启按钮）；
 在 **4.46.6.1**（小米 14 / Android 16）上验证通过。
 
 ## 功能
