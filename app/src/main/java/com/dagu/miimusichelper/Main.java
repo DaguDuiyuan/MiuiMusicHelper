@@ -10,7 +10,10 @@ import android.widget.TextView;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
 
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -23,6 +26,8 @@ import io.github.libxposed.api.XposedModuleInterface;
  * 3. 去掉戴上耳机后每次启动弹出的「臻品音质」弹窗。
  * 4. 播放页进入/退出的过渡动画：进入 400ms 内容级上滑、退出 400ms 窗口下滑。
  * 5. 主页「进页面自动刷新」延后：跳开屏广告后进主页不会再把刷新头卡在半路。
+ * 6. 首页去掉「免费听」tab（顶部入口和底部入口都不再出现）。
+ * 7. 去掉播放条上方的会员推广气泡（「成为超级会员，10万本好书任意听」那条）。
  *
  * 小米音乐 4.46.x 是 QQ 音乐 Lite 的定制版，冷启动链是：
  *   MusicBrowserActivity -> MainActivity.checkColdSplash()
@@ -82,6 +87,8 @@ public final class Main extends XposedModule {
         hookPlayerTransitions(cl);
         hookPlayerEnterAnimation(cl);
         hookHomeAutoRefresh(cl);
+        hookHomeQuickPlayTab(cl);
+        hookMinibarVipBubble(cl);
     }
 
     /**
@@ -693,6 +700,213 @@ public final class Main extends XposedModule {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /** 免费听 tab 只在第一次真正被去掉时记一条日志，避免每次读 tab 列表都刷屏。 */
+    private static volatile boolean sQuickPlayTabDropped = false;
+
+    /**
+     * 首页「免费听」入口。
+     *
+     * 顶部 tab 列表只有两个来源：优先用 Ctry 从 SharedPreferences（"top_tab_display"）
+     * 反序列化出来的 List<TopTab>，为空再退到 ManufacturerSpecImpl.getDefaultTopTabs()
+     * （默认列表里只有 1/2/3，本来就没有免费听）。id 4 = QuickPlayFragment = 免费听，
+     * BaseHomeFragment.updateTabs 拼顶部 tab 用的是它，MainActivityViewModel
+     * .updateBottomTabVisibility 判断底部入口用的也是它，所以直接在这个数据出口把 id 4
+     * 过滤掉最干净：简洁模式顶部只剩「推荐 / 听书」，非简洁模式底部入口也一起消失，
+     * 推荐 / 听书 / K歌 这些 tab 和它们的下标、默认选中都不受影响。
+     *
+     * 4.46.6.1 里这个类连类名、方法名都被混淆成了 Java 关键字（类 try、方法 abstract），
+     * 没法按名字写出来，只能按「无参 + 返回 List」的特征找。返回的是过滤后的副本，
+     * 不动 App 自己的数据（列表每次都是 Gson 新解析的，也不会影响 SharedPreferences）。
+     */
+    private void hookHomeQuickPlayTab(ClassLoader cl) {
+        Class<?> ctry = loadClass(cl, "com.tencent.qqmusicplayerprocess.servicenew.try");
+        Method getTopTabs = findTopTabsGetter(ctry);
+        if (getTopTabs == null) {
+            log(android.util.Log.WARN, TAG, "Ctry top tabs getter not found");
+            return;
+        }
+        hook(getTopTabs).intercept(chain -> {
+            Object tabs = chain.proceed();
+            Object filtered = withoutQuickPlay(tabs);
+            if (filtered != tabs && !sQuickPlayTabDropped) {
+                sQuickPlayTabDropped = true;
+                log(android.util.Log.INFO, TAG, "removed quick play tab from home top tabs");
+            }
+            return filtered;
+        });
+        log(android.util.Log.INFO, TAG, "hooked top tabs to remove quick play tab");
+    }
+
+    /**
+     * Ctry 里的顶部 tab 数据源：无参、返回 List 的那个方法（4.46.6.1 上名字是 abstract，
+     * 属于类 try，源码里写不出来，只能扫签名）。该类里满足这个特征的只有这一个方法。
+     */
+    private static Method findTopTabsGetter(Class<?> ctry) {
+        if (ctry == null) {
+            return null;
+        }
+        for (Method method : ctry.getDeclaredMethods()) {
+            if (method.getParameterCount() == 0
+                    && !Modifier.isStatic(method.getModifiers())
+                    && List.class.isAssignableFrom(method.getReturnType())) {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    /** 去掉 id == 4（免费听）的 TopTab；没有可去掉的就原样返回，方便调用方比较。 */
+    private static Object withoutQuickPlay(Object tabs) {
+        if (!(tabs instanceof List)) {
+            return tabs;
+        }
+        List<?> list = (List<?>) tabs;
+        boolean hasQuickPlay = false;
+        for (Object tab : list) {
+            if (isQuickPlayTab(tab)) {
+                hasQuickPlay = true;
+                break;
+            }
+        }
+        if (!hasQuickPlay) {
+            return tabs;
+        }
+        List<Object> filtered = new ArrayList<>(list.size());
+        for (Object tab : list) {
+            if (!isQuickPlayTab(tab)) {
+                filtered.add(tab);
+            }
+        }
+        return filtered;
+    }
+
+    /** TopTab.getId() == 4 即免费听（App 自己判断 QuickPlay 用的也是 4）。 */
+    private static boolean isQuickPlayTab(Object topTab) {
+        try {
+            Object id = topTab.getClass().getMethod("getId").invoke(topTab);
+            return id instanceof Number && ((Number) id).intValue() == 4;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 播放条上方三条会员推广气泡的场景名（BubbleState 的 scene 字符串）。
+     * 括号里是 4.46.6.1 内置付费配置的默认文案，实际文案以服务端下发为准。
+     */
+    private static final String[] MINIBAR_VIP_SCENES = {
+            "vip_user",             // 66 升级超级会员，任意用音质全家桶特权（本机实测撞的就是这条）
+            "SCENE_NON_VIP_SONG",   // 67 订阅会员，上亿有声内容任你听
+            "long_audio",           // 95 成为超级会员，10万本好书任意听
+    };
+    /** 只记第一条日志，避免每次刷新气泡状态都刷屏。 */
+    private static volatile boolean sMinibarVipBubbleBlocked = false;
+
+    /**
+     * 播放条上方那条会员推广气泡（首次播放时弹出来的「成为超级会员，10万本好书任意听」）。
+     *
+     * 4.46.6.1：三条付费引导场景共用同一个 MinibarBubble（播放条上方带箭头的横条）：
+     * vip_user（绿钻用户，本机实测撞的是这条）、SCENE_NON_VIP_SONG（非会员）、long_audio
+     * （首次播放长音频）。文案、图标、底色都来自 payTip 配置（服务端可改），所以只能按
+     * 场景名判断。气泡的展示链路上两道都拦：
+     *   - MinibarBubbleManager.tryShowBubble(SongInfo, String, int, String)：请求层，
+     *     场景名在第 4 个参数，拦下后 App 不会进入这个气泡状态；
+     *   - MiniBarController.setMinibarBubbleVisibility(Boolean, BubbleState)：唯一的显示
+     *     出口（只有 show=true 才会画出来），兜底。
+     * 只拦这三条场景的展示；免费听 / 登录 / 试听 / 音质音效气泡以及所有隐藏调用原样透传，
+     * 被拦下的气泡也不占高度。
+     */
+    private void hookMinibarVipBubble(ClassLoader cl) {
+        Class<?> manager = loadClass(cl,
+                "com.tencent.qqmusiclite.ui.minibar.MinibarBubbleManager");
+        Method tryShowBubble = findTryShowBubble(manager);
+        if (tryShowBubble == null) {
+            log(android.util.Log.WARN, TAG, "MinibarBubbleManager.tryShowBubble not found");
+        } else {
+            hook(tryShowBubble).intercept(chain -> {
+                Object scene = chain.getArg(3);
+                if (isMinibarVipScene(scene)) {
+                    logBlockedMinibarVipBubble("request", (String) scene);
+                    return null;
+                }
+                return chain.proceed();
+            });
+            log(android.util.Log.INFO, TAG, "hooked MinibarBubbleManager.tryShowBubble");
+        }
+
+        Class<?> controller = loadClass(cl,
+                "com.tencent.qqmusiclite.ui.minibar.MiniBarController");
+        Class<?> bubbleState = loadClass(cl,
+                "com.tencent.qqmusiclite.ui.minibar.BubbleState");
+        Method setVisible = controller == null || bubbleState == null ? null
+                : findMethod(controller, "setMinibarBubbleVisibility", Boolean.class, bubbleState);
+        if (setVisible == null) {
+            log(android.util.Log.WARN, TAG,
+                    "MiniBarController.setMinibarBubbleVisibility not found");
+            return;
+        }
+        hook(setVisible).intercept(chain -> {
+            String scene = sceneOf(chain.getArg(1));
+            if (Boolean.TRUE.equals(chain.getArg(0)) && isMinibarVipScene(scene)) {
+                logBlockedMinibarVipBubble("display", scene);
+                return null;
+            }
+            return chain.proceed();
+        });
+        log(android.util.Log.INFO, TAG,
+                "hooked MiniBarController.setMinibarBubbleVisibility");
+    }
+
+    private static boolean isMinibarVipScene(Object scene) {
+        if (!(scene instanceof String)) {
+            return false;
+        }
+        for (String vipScene : MINIBAR_VIP_SCENES) {
+            if (vipScene.equals(scene)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** BubbleState.getScene()；取不到就返回 null（宁可不拦）。 */
+    private static String sceneOf(Object bubbleState) {
+        if (bubbleState == null) {
+            return null;
+        }
+        try {
+            Object scene = bubbleState.getClass().getMethod("getScene").invoke(bubbleState);
+            return scene instanceof String ? (String) scene : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private void logBlockedMinibarVipBubble(String from, String scene) {
+        if (!sMinibarVipBubbleBlocked) {
+            sMinibarVipBubbleBlocked = true;
+            log(android.util.Log.INFO, TAG, "blocked minibar vip bubble (" + from + "): " + scene);
+        }
+    }
+
+    /** tryShowBubble(SongInfo, String, int, String)：场景名在第 4 个参数。 */
+    private static Method findTryShowBubble(Class<?> manager) {
+        if (manager == null) {
+            return null;
+        }
+        for (Method method : manager.getDeclaredMethods()) {
+            Class<?>[] params = method.getParameterTypes();
+            if ("tryShowBubble".equals(method.getName())
+                    && params.length == 4
+                    && params[1] == String.class
+                    && params[2] == int.class
+                    && params[3] == String.class) {
+                return method;
+            }
+        }
+        return null;
     }
 
     private void hookReturnBooleanFalse(Class<?> cls, String name, Class<?>... params) {
