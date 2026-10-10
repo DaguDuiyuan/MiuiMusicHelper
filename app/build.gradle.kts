@@ -1,6 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
+
+// 发布版签名信息放在仓库根目录的 keystore.properties（已 gitignore，不入库）。
+// 文件不存在时 release 就是未签名包，不影响 debug 构建。
+val keystoreProps = Properties().also { props ->
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) {
+        file.reader(Charsets.UTF_8).use { reader -> props.load(reader) }
+    }
+}
+val releaseStoreFile = keystoreProps.getProperty("storeFile")
 
 android {
     namespace = "com.dagu.miimusichelper"
@@ -16,9 +28,23 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        create("release") {
+            if (!releaseStoreFile.isNullOrBlank()) {
+                storeFile = file(releaseStoreFile)
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (!releaseStoreFile.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
