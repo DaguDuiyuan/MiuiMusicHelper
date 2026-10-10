@@ -1,7 +1,7 @@
 # 小米音乐小助手（MiuiMusicHelper）
 
 针对小米音乐（`com.miui.player`）的 LSPosed 模块，用的是新版 Xposed API（**LSPosed API 102**）。
-模块没有任何界面，装好后在 LSPosed 里启用并勾上作用域 `com.miui.player` 就行，四个功能全自动生效。
+模块没有任何界面，装好后在 LSPosed 里启用并勾上作用域 `com.miui.player` 就行，五个功能全自动生效。
 
 在小米音乐 **4.46.6.1**（小米 14 / Android 16 / KernelSU + Zygisk-LSPosed）上验证通过。
 
@@ -54,6 +54,19 @@
   再用 400ms `DecelerateInterpolator(1.5f)` 滑回 0。播放页窗口此刻仍是 translucent 的，
   露出的是后面真实的主界面，观感和 App 自己的手势是同一条路数。
 
+### 5. 主页「进页面自动刷新」延后（修：跳过开屏广告后刷新头卡住）
+
+跳过（或干脆没有）开屏广告时，`HomeFragment.onVisible` 会在首屏数据（缓存 / 网络）还没落地时
+就发出自动刷新（`mRecyclerView.post { setRefreshing(true) }`），刷新控件在展开动画中途又收到
+收尾调用，状态机停在中间态 —— 页头卡在下沉位置不回弹（手动下拉能拉回来，因为手指释放那条
+路径不经过 `setRefreshing`）。看了广告的启动晚几秒，自动刷新等到数据落定后才执行，就没有这个问题。
+
+处理：记录 `HomeFragment.onVisible` 的时刻，把紧跟在主页可见之后（2s 内）、控件空闲（`status==0`）
+时到达的 `setRefreshing(true, int)` 延后 1s 再执行；到点重新判断 —— 控件已被别的刷新占用或页面
+已销毁就丢弃，数据已就绪（非空且非缓存）就跳过（等价于「看了广告」的那条路径），否则以原参数
+补一次 `setRefreshing(true, 400)`，走 App 自己的正常流程。只作用于主页那个 RecyclerView，
+手动下拉和其它页面不受影响。
+
 ## 环境要求
 
 - 支持 **API 102** 的 LSPosed（新版 libxposed API）；
@@ -100,6 +113,7 @@ adb logcat | grep MIUI-Music-AdFree
 - `blocked earphone quality popup: checkAndShow`
 - `player enter slide: 2400px / 400ms`
 - `player transition: enter 0x... -> 0x..., exit 0x... -> 0x...`
+- `defer home auto refresh 1000ms`，以及到点的 `deferred auto refresh runs / skipped / dropped`
 
 ## 兼容性
 

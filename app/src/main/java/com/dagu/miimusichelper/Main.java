@@ -4,22 +4,25 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.view.View;
 import android.widget.TextView;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.ref.WeakReference;
 
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * 小米音乐（com.miui.player）小助手。四个独立的功能：
+ * 小米音乐（com.miui.player）小助手。五个独立的功能：
  *
  * 1. 去开屏广告。
  * 2. 去掉播放页压在进度条上的会员推广文案。
  * 3. 去掉戴上耳机后每次启动弹出的「臻品音质」弹窗。
  * 4. 播放页进入/退出的过渡动画：进入 400ms 内容级上滑、退出 400ms 窗口下滑。
+ * 5. 主页「进页面自动刷新」延后：跳开屏广告后进主页不会再把刷新头卡在半路。
  *
  * 小米音乐 4.46.x 是 QQ 音乐 Lite 的定制版，冷启动链是：
  *   MusicBrowserActivity -> MainActivity.checkColdSplash()
@@ -78,6 +81,7 @@ public final class Main extends XposedModule {
         hookHeadphoneQualityPopup(cl);
         hookPlayerTransitions(cl);
         hookPlayerEnterAnimation(cl);
+        hookHomeAutoRefresh(cl);
     }
 
     /**
@@ -529,6 +533,165 @@ public final class Main extends XposedModule {
                 }
                 return result;
             });
+        }
+    }
+
+    /** onVisible 之后多久内到达的 setRefreshing(true) 算「进主页时的自动刷新」。 */
+    private static final long HOME_REFRESH_WINDOW_MS = 2000L;
+    /** 自动刷新延后多久补发，给首屏缓存/网络数据留出落地时间。 */
+    private static final long HOME_REFRESH_DELAY_MS = 1000L;
+
+    /** 主页最近一次 onVisible 的时刻（uptimeMillis），0 表示还没见过。 */
+    private static volatile long sHomeVisibleAtMs = 0L;
+    /** 主页 Fragment 弱引用，用于延后结束时重判数据是否已就绪。 */
+    private static volatile WeakReference<Object> sHomeFragmentRef = new WeakReference<>(null);
+    /** 延迟任务里重新调用 setRefreshing 时置位，避免被自己的 hook 二次延后。 */
+    private static volatile boolean sDeferBypass = false;
+
+    /**
+     * 主页「进页面自动刷一下」延后。
+     *
+     * 背景（4.46.6.1）：跳过（或干脆没有）开屏广告时，onVisible 在首屏数据还没落地时
+     * 就发出自动刷新（HomeFragment.onVisible -> mRecyclerView.post -> setRefreshing(true)），
+     * 刷新控件在展开动画中途又收到收尾调用，状态机停在中间态：页头卡在下沉位置不回弹。
+     * 手动下拉能拉回来，因为手指释放那条路径不经过 setRefreshing；看了广告的启动晚几秒，
+     * 自动刷新等数据落定后才执行，就一路正常。
+     *
+     * 做法：记录 HomeFragment.onVisible 的时刻；把紧跟在主页可见之后、控件空闲时到达的
+     * setRefreshing(true)（唯一漏斗重载，两个单参重载最终都调它）挪到
+     * HOME_REFRESH_DELAY_MS 之后再执行。到点时重判：
+     *   - 控件已被别的刷新占用（status != 0）或页面已销毁 → 丢弃这次自动刷新；
+     *   - 数据已就绪（非空且不是缓存）→ 跳过刷新（等价于「看了广告」的那条路径）；
+     *   - 否则用原参数补一次 setRefreshing(true, dur)，走 App 自己的正常流程。
+     * 只认主页那个 RecyclerView，其它页面同名控件不受影响；手动下拉不受影响。
+     */
+    private void hookHomeAutoRefresh(ClassLoader cl) {
+        Class<?> home = loadClass(cl, "com.tencent.qqmusiclite.fragment.home.HomeFragment");
+        Class<?> recycler = loadClass(cl,
+                "com.tencent.qqmusic.business.timeline.ui.refreshable.RefreshableRecyclerViewNew");
+        Method onVisible = home == null ? null : findMethod(home, "onVisible");
+        Method getMRecyclerView = home == null ? null : findMethod(home, "getMRecyclerView");
+        Method getViewModel = home == null ? null : findMethod(home, "getViewModel");
+        Method setRefreshing = recycler == null ? null
+                : findMethod(recycler, "setRefreshing", boolean.class, int.class);
+        Method getStatus = recycler == null ? null : findMethod(recycler, "getStatus");
+        if (onVisible == null || getMRecyclerView == null || getViewModel == null
+                || setRefreshing == null || getStatus == null) {
+            log(android.util.Log.WARN, TAG, "home auto refresh hooks not found"
+                    + " (onVisible=" + (onVisible != null)
+                    + " getMRecyclerView=" + (getMRecyclerView != null)
+                    + " getViewModel=" + (getViewModel != null)
+                    + " setRefreshing=" + (setRefreshing != null)
+                    + " getStatus=" + (getStatus != null) + ")");
+            return;
+        }
+
+        hook(onVisible).intercept(chain -> {
+            Object result = chain.proceed();
+            Object self = chain.getThisObject();
+            if (home.isInstance(self)) {
+                sHomeVisibleAtMs = SystemClock.uptimeMillis();
+                sHomeFragmentRef = new WeakReference<>(self);
+            }
+            return result;
+        });
+
+        hook(setRefreshing).intercept(chain -> {
+            if (sDeferBypass) {
+                // 延迟任务补发的那次，直接放行。
+                sDeferBypass = false;
+                return chain.proceed();
+            }
+            Object self = chain.getThisObject();
+            if (!(self instanceof View)
+                    || !Boolean.TRUE.equals(chain.getArg(0))
+                    || !withinHomeRefreshWindow()
+                    || !isHomeRecycler(self, getMRecyclerView)
+                    || statusOf(self, getStatus) != 0) {
+                return chain.proceed();
+            }
+            final View view = (View) self;
+            final int duration = toInt(chain.getArg(1));
+            log(android.util.Log.INFO, TAG, "defer home auto refresh " + HOME_REFRESH_DELAY_MS + "ms");
+            view.postDelayed(() -> runDeferredHomeRefresh(view, duration, setRefreshing,
+                    getStatus, getViewModel), HOME_REFRESH_DELAY_MS);
+            return null;
+        });
+        log(android.util.Log.INFO, TAG,
+                "hooked HomeFragment.onVisible + setRefreshing for auto refresh deferral");
+    }
+
+    private static boolean withinHomeRefreshWindow() {
+        long at = sHomeVisibleAtMs;
+        if (at == 0L) {
+            return false;
+        }
+        long since = SystemClock.uptimeMillis() - at;
+        return since >= 0L && since <= HOME_REFRESH_WINDOW_MS;
+    }
+
+    private static boolean isHomeRecycler(Object recyclerView, Method getMRecyclerView) {
+        Object fragment = sHomeFragmentRef.get();
+        if (fragment == null) {
+            return false;
+        }
+        try {
+            return getMRecyclerView.invoke(fragment) == recyclerView;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static int statusOf(Object recyclerView, Method getStatus) {
+        try {
+            Object status = getStatus.invoke(recyclerView);
+            return status instanceof Number ? ((Number) status).intValue() : 0;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 延后到点：重新判断这次自动刷新还该不该发。 */
+    private void runDeferredHomeRefresh(View view, int duration, Method setRefreshing,
+                                        Method getStatus, Method getViewModel) {
+        if (!view.isAttachedToWindow()) {
+            log(android.util.Log.INFO, TAG, "deferred auto refresh dropped: view detached");
+            return;
+        }
+        if (statusOf(view, getStatus) != 0) {
+            log(android.util.Log.INFO, TAG, "deferred auto refresh dropped: refresh already running");
+            return;
+        }
+        if (homeDataReady(getViewModel)) {
+            log(android.util.Log.INFO, TAG, "deferred auto refresh skipped: data already loaded");
+            return;
+        }
+        log(android.util.Log.INFO, TAG, "deferred auto refresh runs");
+        sDeferBypass = true;
+        try {
+            setRefreshing.invoke(view, true, duration);
+        } catch (Throwable t) {
+            sDeferBypass = false;
+            log(android.util.Log.WARN, TAG, "deferred auto refresh failed: " + t);
+        }
+    }
+
+    /** 数据已就绪 = 非空且不是缓存；判断不了时按未就绪处理（照常刷新）。 */
+    private static boolean homeDataReady(Method getViewModel) {
+        Object fragment = sHomeFragmentRef.get();
+        if (fragment == null) {
+            return false;
+        }
+        try {
+            Object viewModel = getViewModel.invoke(fragment);
+            if (viewModel == null) {
+                return false;
+            }
+            Object empty = viewModel.getClass().getMethod("empty").invoke(viewModel);
+            Object cached = viewModel.getClass().getMethod("isCachedData").invoke(viewModel);
+            return Boolean.FALSE.equals(empty) && Boolean.FALSE.equals(cached);
+        } catch (Throwable t) {
+            return false;
         }
     }
 
