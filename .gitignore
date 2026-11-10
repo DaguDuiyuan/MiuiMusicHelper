@@ -3,6 +3,10 @@
 build/
 app/build/
 
+# 本机用的 Gradle 用户目录和 Android 用户目录（依赖缓存、adb key 之类，很大且机器相关）
+.gradle-home/
+.android-home/
+
 # 本机环境（里面写着各自的 Android SDK 路径，不该跟着仓库走）
 local.properties
 

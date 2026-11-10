@@ -17,6 +17,8 @@ val releaseStoreFile = keystoreProps.getProperty("storeFile")
 android {
     namespace = "com.dagu.miimusichelper"
     compileSdk = 36
+    // AGP 9.4 默认要 36.0.0，这里钉到本机装着的 36.1.0。
+    buildToolsVersion = "36.1.0"
 
     defaultConfig {
         // LSPosed keys a module on this id: renaming it means the module has to be
@@ -24,8 +26,8 @@ android {
         applicationId = "com.dagu.miimusichelper"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
     }
 
     signingConfigs {

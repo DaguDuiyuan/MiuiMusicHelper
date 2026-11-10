@@ -3,7 +3,7 @@
 小米音乐（`com.miui.player`）的 LSPosed 模块，使用新版 Xposed API（**LSPosed API 102**）。
 没有自己的界面：在 LSPosed 里启用并勾上作用域 `com.miui.player` 即全自动生效，默认全开，
 七项功能可在音乐 App 设置里单独关（QQ 音源：「更多」页 →「小米音乐小助手」，独立页里带重启按钮）；
-在 **4.46.6.1**（小米 14 / Android 16）上验证通过。
+已适配 **4.48.0.1**（小米 14 / Android 16），并保留 4.46.6.1 的兼容。
 
 ## 功能
 
@@ -37,6 +37,9 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 adb install -r -d app/build/outputs/apk/debug/app-debug.apk
 ```
 
+发布包用 `./gradlew :app:assembleRelease` 构建；正式签名在仓库根目录放 `keystore.properties`
+（`storeFile` / `storePassword` / `keyAlias` / `keyPassword`，已 gitignore）。
+
 装完在 LSPosed 里启用模块、勾上 `com.miui.player`，再杀掉音乐 App 进程重开。
 
 ## 目录结构
@@ -55,5 +58,5 @@ tag 是 `MIUI-Music-AdFree`（`adb logcat | grep MIUI-Music-AdFree`）。正常�
 
 ## 兼容性
 
-hook 都按 4.46.6.1 的类名 / 方法签名写；App 升级后签名变了对应条目只是静默不生效
-（日志会打 `WARN`），不影响启动。
+hook 都按 4.48.0.1 的类名 / 方法签名写（「免费听」入口同时兼容 4.46.6.1）；App 升级后
+签名变了对应条目只是静默不生效（日志会打 `WARN`），不影响启动。

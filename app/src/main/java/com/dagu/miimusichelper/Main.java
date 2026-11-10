@@ -1740,9 +1740,19 @@ public final class Main extends XposedModule {
     private static volatile boolean sQuickPlayTabDropped = false;
 
     /**
+     * QQPlayerPreferences 的混淆类名。R8 每个版本都可能换，按新到旧排列：
+     * 4.48.0.1 是 case，4.46.6.1 是 try。类里的方法名同样会被混淆，所以真正定位
+     * 数据源仍然靠「无参 + 返回 List」这个签名。
+     */
+    private static final String[] QQ_PLAYER_PREFS_CLASSES = {
+            "com.tencent.qqmusicplayerprocess.servicenew.case",
+            "com.tencent.qqmusicplayerprocess.servicenew.try",
+    };
+
+    /**
      * 首页「免费听」入口。
      *
-     * 顶部 tab 列表只有两个来源：优先用 Ctry 从 SharedPreferences（"top_tab_display"）
+     * 顶部 tab 列表只有两个来源：优先用 QQPlayerPreferences 从 SharedPreferences（"top_tab_display"）
      * 反序列化出来的 List<TopTab>，为空再退到 ManufacturerSpecImpl.getDefaultTopTabs()
      * （默认列表里只有 1/2/3，本来就没有免费听）。id 4 = QuickPlayFragment = 免费听，
      * BaseHomeFragment.updateTabs 拼顶部 tab 用的是它，MainActivityViewModel
@@ -1751,40 +1761,47 @@ public final class Main extends XposedModule {
      * 推荐 / 听书 / K歌 这些 tab 和它们的下标、默认选中都不受影响。
      *
      * 4.46.6.1 里这个类连类名、方法名都被混淆成了 Java 关键字（类 try、方法 abstract），
-     * 没法按名字写出来，只能按「无参 + 返回 List」的特征找。返回的是过滤后的副本，
-     * 不动 App 自己的数据（列表每次都是 Gson 新解析的，也不会影响 SharedPreferences）。
+     * 4.48.0.1 又换成了类 case、方法 continue，没法稳定按名字写，只能按
+     * 「无参 + 返回 List」的特征找。返回的是过滤后的副本，不动 App 自己的数据
+     * （列表每次都是 Gson 新解析的，也不会影响 SharedPreferences）。
      */
     private void hookHomeQuickPlayTab(ClassLoader cl) {
-        Class<?> ctry = loadClass(cl, "com.tencent.qqmusicplayerprocess.servicenew.try");
-        Method getTopTabs = findTopTabsGetter(ctry);
-        if (getTopTabs == null) {
-            log(android.util.Log.WARN, TAG, "Ctry top tabs getter not found");
+        for (String className : QQ_PLAYER_PREFS_CLASSES) {
+            Class<?> prefsCls = loadClass(cl, className);
+            Method getTopTabs = findTopTabsGetter(prefsCls);
+            if (getTopTabs == null) {
+                continue;
+            }
+            hook(getTopTabs).intercept(chain -> {
+                if (!isEnabled(KEY_QUICK_PLAY_TAB)) {
+                    return chain.proceed();
+                }
+                Object tabs = chain.proceed();
+                Object filtered = withoutQuickPlay(tabs);
+                if (filtered != tabs && !sQuickPlayTabDropped) {
+                    sQuickPlayTabDropped = true;
+                    log(android.util.Log.INFO, TAG, "removed quick play tab from home top tabs");
+                }
+                return filtered;
+            });
+            log(android.util.Log.INFO, TAG,
+                    "hooked top tabs to remove quick play tab via " + className);
             return;
         }
-        hook(getTopTabs).intercept(chain -> {
-            if (!isEnabled(KEY_QUICK_PLAY_TAB)) {
-                return chain.proceed();
-            }
-            Object tabs = chain.proceed();
-            Object filtered = withoutQuickPlay(tabs);
-            if (filtered != tabs && !sQuickPlayTabDropped) {
-                sQuickPlayTabDropped = true;
-                log(android.util.Log.INFO, TAG, "removed quick play tab from home top tabs");
-            }
-            return filtered;
-        });
-        log(android.util.Log.INFO, TAG, "hooked top tabs to remove quick play tab");
+        log(android.util.Log.WARN, TAG, "top tabs getter not found (tried "
+                + String.join(", ", QQ_PLAYER_PREFS_CLASSES) + ")");
     }
 
     /**
-     * Ctry 里的顶部 tab 数据源：无参、返回 List 的那个方法（4.46.6.1 上名字是 abstract，
-     * 属于类 try，源码里写不出来，只能扫签名）。该类里满足这个特征的只有这一个方法。
+     * QQPlayerPreferences 里的顶部 tab 数据源：无参、返回 List 的那个方法
+     * （4.46.6.1 是 try.abstract，4.48.0.1 是 case.continue，名字写不出来，只能扫签名）。
+     * 该类里满足这个特征的只有这一个方法。
      */
-    private static Method findTopTabsGetter(Class<?> ctry) {
-        if (ctry == null) {
+    private static Method findTopTabsGetter(Class<?> prefsCls) {
+        if (prefsCls == null) {
             return null;
         }
-        for (Method method : ctry.getDeclaredMethods()) {
+        for (Method method : prefsCls.getDeclaredMethods()) {
             if (method.getParameterCount() == 0
                     && !Modifier.isStatic(method.getModifiers())
                     && List.class.isAssignableFrom(method.getReturnType())) {
